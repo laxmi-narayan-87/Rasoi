@@ -1,0 +1,1 @@
+"""Rasoi recipe finder application."""
