@@ -33,7 +33,7 @@ def startup():
 
 def require_data():
     if not all_recipes():
-        raise HTTPException(503, "Recipe dataset not loaded. Follow README.md to import the CSV.")
+        raise HTTPException(503, "Recipe database is empty. The local SQLite database must contain recipe records.")
 
 
 @app.get("/", include_in_schema=False)

@@ -1,13 +1,12 @@
 """Local SQLite recipe catalog and deterministic ingredient matching."""
 from __future__ import annotations
-import csv, json, random, re, sqlite3
+import json, random, re, sqlite3
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "data" / "recipes.db"
-CSV_PATH = ROOT / "data" / "IndianFoodDataset.csv"
+DB_PATH = ROOT / "data" / "Recipe Database.db"
 ALIASES = {"aloo":"potato", "alu":"potato", "batata":"potato", "pyaz":"onion", "pyaaz":"onion", "tamatar":"tomato", "jeera":"cumin", "jira":"cumin", "haldi":"turmeric", "dhania":"coriander", "adrak":"ginger", "lahsun":"garlic", "dahi":"yogurt", "curd":"yogurt", "chawal":"rice", "matar":"peas", "gobi":"cauliflower", "baingan":"eggplant", "anda":"egg", "mirch":"chilli"}
 
 
@@ -35,9 +34,6 @@ def split_ingredients(value):
     return result
 
 
-def row_value(row, *names):
-    lower = {str(k).lower(): v for k, v in row.items()}
-    return next((text(lower.get(n.lower())) for n in names if text(lower.get(n.lower()))), "")
 
 
 def duration(value):
@@ -49,36 +45,6 @@ def duration(value):
     return int(hours.group(1))*60 + int(minutes.group(1) if minutes else 0) if hours or minutes else None
 
 
-def normalize_row(row, recipe_id):
-    name = row_value(row, "TranslatedRecipeName", "RecipeName", "recipe_name", "name")
-    raw = row_value(row, "TranslatedIngredients", "Ingredients", "ingredients")
-    if not name or not raw:
-        return None
-    ingredients = split_ingredients(raw)
-    diet_source = row_value(row, "Diet", "diet").lower()
-    terms = " ".join(key(x) for x in ingredients)
-    nonveg = ("chicken", "fish", "prawn", "shrimp", "mutton", "beef", "pork", "meat")
-    if any(re.search(rf"\b{x}\b", terms) for x in nonveg) or "non-vegetarian" in diet_source:
-        diet = "non-vegetarian"
-    elif re.search(r"\begg\b", terms) or "egg" in diet_source:
-        diet = "egg"
-    elif "vegetarian" in diet_source or diet_source == "veg":
-        diet = "vegetarian"
-    else:
-        diet = "unknown"
-    return {
-        "id": recipe_id, "name": name, "ingredients_raw": raw,
-        "ingredient_list": ingredients,
-        "ingredient_keys": sorted(set(filter(None, map(key, ingredients)))),
-        "instructions": row_value(row, "TranslatedInstructions", "Instructions", "instructions", "method"),
-        "prep_time": row_value(row, "Prep", "PrepTime", "PrepTimeInMins", "prep_time"),
-        "cook_time": row_value(row, "Cook", "CookTime", "CookTimeInMins", "cook_time"),
-        "total_time": row_value(row, "Total", "TotalTime", "TotalTimeInMins", "total_time"),
-        "servings": row_value(row, "Servings", "servings"),
-        "cuisine": row_value(row, "Cuisine", "cuisine") or "Not specified",
-        "course": row_value(row, "Course", "course") or "Not specified",
-        "diet": diet, "source_url": row_value(row, "URL", "RecipeURL", "url", "SourceURL"),
-    }
 
 
 @contextmanager
@@ -107,29 +73,6 @@ def init_db(db_path=DB_PATH):
         db.execute("CREATE INDEX IF NOT EXISTS idx_recipe_name ON recipes(name)")
 
 
-def import_csv(csv_path=CSV_PATH, db_path=DB_PATH):
-    csv_path = Path(csv_path)
-    if not csv_path.exists():
-        raise FileNotFoundError(f"Dataset not found: {csv_path}")
-    init_db(db_path)
-    rows = []
-    with csv_path.open(encoding="utf-8-sig", newline="") as f:
-        for recipe_id, raw in enumerate(csv.DictReader(f), 1):
-            recipe = normalize_row(raw, recipe_id)
-            if recipe:
-                rows.append((
-                    recipe["id"], recipe["name"], recipe["ingredients_raw"],
-                    json.dumps(recipe["ingredient_list"], ensure_ascii=False),
-                    json.dumps(recipe["ingredient_keys"], ensure_ascii=False),
-                    recipe["instructions"], recipe["prep_time"], recipe["cook_time"],
-                    recipe["total_time"], recipe["servings"], recipe["cuisine"],
-                    recipe["course"], recipe["diet"], recipe["source_url"],
-                ))
-    with connect(db_path) as db:
-        db.execute("DELETE FROM recipes")
-        db.executemany("INSERT INTO recipes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
-    all_recipes.cache_clear()
-    return len(rows)
 
 
 @lru_cache(maxsize=4)
