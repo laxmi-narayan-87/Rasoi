@@ -126,7 +126,7 @@ def parse_row(row: dict[str, str]) -> dict | None:
         "cuisine": first("Cuisine", "cuisine", "cuisine_type", default="Not specified"),
         "course": first("Course", "course", "meal_type", "category", default="Not specified"),
         "diet": diet,
-        "source_url": first("URL", "SourceURL", "source_url", "url", "recipe_url"),
+        "source_url": first("URL", "SourceURL", "source_url", "url", "recipe_url", "link", "Recipe URL"),
     }
 
 
