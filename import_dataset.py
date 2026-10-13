@@ -2,7 +2,7 @@
 
 By default this imports into local SQLite. Set DATABASE_URL in the environment
 to import into hosted PostgreSQL instead. Importing into cloud PostgreSQL is a
-manual, one-time operation; the Vercel app never downloads or imports the CSV.
+manual, controlled operation; the Vercel app never downloads or imports the CSV.
 """
 from __future__ import annotations
 
@@ -25,6 +25,20 @@ CSV_PATH = Path(os.getenv("RASOI_DATASET_PATH", str(DEFAULT_CSV))).expanduser()
 
 def normalize_header(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (value or "").strip().lower())
+
+
+def parse_list(value: str) -> list[str] | None:
+    """Parse JSON-list-like cells from recipe datasets, if present."""
+    value = (value or "").strip()
+    if not value.startswith("["):
+        return None
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(parsed, list):
+        return None
+    return [str(item).strip() for item in parsed if item is not None and str(item).strip()]
 
 
 def parse_row(row: dict[str, str]) -> dict | None:
@@ -53,14 +67,22 @@ def parse_row(row: dict[str, str]) -> dict | None:
             number *= 60
         return str(int(number)) if number.is_integer() else str(number)
 
-    name = first("TranslatedRecipeName", "RecipeName", "Recipe Name", "recipe_name", "name", "title")
+    name = first(
+        "TranslatedRecipeName", "RecipeName", "Recipe Name", "recipe_name", "name", "title"
+    )
     raw_ingredients = first(
         "TranslatedIngredients", "Ingredients", "ingredient_list", "ingredients", "ingredients_list"
     )
     if not name or not raw_ingredients:
         return None
 
-    ingredients = split_ingredients(raw_ingredients)
+    parsed_ingredients = parse_list(raw_ingredients)
+    if parsed_ingredients is not None:
+        ingredients = []
+        for value in parsed_ingredients:
+            ingredients.extend(split_ingredients(value))
+    else:
+        ingredients = split_ingredients(raw_ingredients)
     if not ingredients:
         return None
 
@@ -80,26 +102,40 @@ def parse_row(row: dict[str, str]) -> dict | None:
     else:
         diet = "unknown"
 
+    raw_instructions = first(
+        "TranslatedInstructions", "Instructions", "instruction", "method", "steps", "directions"
+    )
+    parsed_instructions = parse_list(raw_instructions)
+    if parsed_instructions is not None:
+        instructions = "\n".join(
+            f"{index}. {step}" for index, step in enumerate(parsed_instructions, start=1)
+        )
+    else:
+        instructions = raw_instructions or "No instructions available in the source dataset."
+
     return {
         "name": name,
         "ingredients_raw": raw_ingredients,
         "ingredient_list": json.dumps(ingredients, ensure_ascii=False),
         "ingredient_keys": json.dumps([key(item) for item in ingredients], ensure_ascii=False),
-        "instructions": first(
-            "TranslatedInstructions", "Instructions", "instruction", "method", "steps", "directions"
-        ) or "No instructions available in the source dataset.",
+        "instructions": instructions,
         "prep_time": prep,
         "cook_time": cook,
         "total_time": total,
         "servings": first("Servings", "servings", "yield"),
         "cuisine": first("Cuisine", "cuisine", "cuisine_type", default="Not specified"),
-        "course": first("Course", "course", "meal_type", default="Not specified"),
+        "course": first("Course", "course", "meal_type", "category", default="Not specified"),
         "diet": diet,
         "source_url": first("URL", "SourceURL", "source_url", "url", "recipe_url"),
     }
 
 
-def import_dataset(csv_path: Path = CSV_PATH, replace: bool = False) -> dict[str, int]:
+def import_dataset(
+    csv_path: Path = CSV_PATH,
+    replace: bool = False,
+    db_path: Path | None = None,
+) -> dict[str, int]:
+    """Import CSV rows. Pass db_path to force a specific local SQLite file (useful for tests)."""
     csv_path = Path(csv_path).expanduser()
     if not csv_path.is_file():
         raise FileNotFoundError(
@@ -107,7 +143,7 @@ def import_dataset(csv_path: Path = CSV_PATH, replace: bool = False) -> dict[str
             "Run python download_dataset.py or set RASOI_DATASET_PATH to the CSV path."
         )
 
-    init_db()
+    init_db(db_path)
     processed = skipped = 0
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -115,15 +151,20 @@ def import_dataset(csv_path: Path = CSV_PATH, replace: bool = False) -> dict[str
             raise ValueError("CSV has no header row.")
 
         normalized_headers = {normalize_header(name) for name in reader.fieldnames}
-        if not normalized_headers.intersection({
-            "translatedrecipename", "recipename", "name", "title", "recipename"
-        }):
+        if not normalized_headers.intersection({"translatedrecipename", "recipename", "name", "title"}):
             raise ValueError(
                 "Could not identify a recipe-name column. Inspect the CSV headers and "
                 "extend parse_row() with the dataset's actual column names."
             )
+        if not normalized_headers.intersection({
+            "translatedingredients", "ingredients", "ingredientlist", "ingredientslist"
+        }):
+            raise ValueError(
+                "Could not identify an ingredients column. Inspect the CSV headers and "
+                "extend parse_row() with the dataset's actual column names."
+            )
 
-        with connect() as db:
+        with connect(db_path) as db:
             if replace:
                 db.execute("DELETE FROM recipes")
             for row in reader:
@@ -132,10 +173,19 @@ def import_dataset(csv_path: Path = CSV_PATH, replace: bool = False) -> dict[str
                     skipped += 1
                     continue
 
-                existing = db.execute(
-                    "SELECT id FROM recipes WHERE name = ? AND COALESCE(source_url, '') = ? LIMIT 1",
-                    (recipe["name"], recipe["source_url"]),
-                ).fetchone()
+                if recipe["source_url"]:
+                    existing = db.execute(
+                        "SELECT id FROM recipes WHERE name = ? AND COALESCE(source_url, '') = ? LIMIT 1",
+                        (recipe["name"], recipe["source_url"]),
+                    ).fetchone()
+                else:
+                    # Avoid collapsing distinct recipes that share a title but have no URL.
+                    existing = db.execute(
+                        "SELECT id FROM recipes WHERE name = ? AND COALESCE(source_url, '') = '' "
+                        "AND ingredient_list = ? LIMIT 1",
+                        (recipe["name"], recipe["ingredient_list"]),
+                    ).fetchone()
+
                 fields = (
                     "ingredients_raw", "ingredient_list", "ingredient_keys", "instructions",
                     "prep_time", "cook_time", "total_time", "servings", "cuisine", "course", "diet",
@@ -161,7 +211,9 @@ def import_dataset(csv_path: Path = CSV_PATH, replace: bool = False) -> dict[str
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Import recipe CSV into local SQLite or DATABASE_URL PostgreSQL.")
+    parser = argparse.ArgumentParser(
+        description="Import recipe CSV into local SQLite or DATABASE_URL PostgreSQL."
+    )
     parser.add_argument("csv_path", nargs="?", type=Path, default=CSV_PATH, help="CSV file path")
     parser.add_argument(
         "--replace", action="store_true",
