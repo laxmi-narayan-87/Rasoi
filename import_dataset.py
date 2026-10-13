@@ -1,15 +1,12 @@
-"""Import an Indian recipe CSV into Rasoi's SQLite database.
+"""Import a locally downloaded recipe CSV into Rasoi's active database.
 
-Local development:
-    python import_dataset.py
-    RASOI_DATASET_PATH=data/IndianFoodDataset.csv python import_dataset.py
-
-The importer is idempotent by recipe name + source URL. It accepts common column
-names from Indian recipe datasets. It does not download datasets automatically;
-obtain the dataset from a source you are authorized to use.
+By default this imports into local SQLite. Set DATABASE_URL in the environment
+to import into hosted PostgreSQL instead. Importing into cloud PostgreSQL is a
+manual, one-time operation; the Vercel app never downloads or imports the CSV.
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import os
@@ -17,7 +14,9 @@ import re
 import sys
 from pathlib import Path
 
-from app.recipes import connect, init_db, key, split_ingredients
+from app.recipes import (
+    all_recipes, connect, database_backend, init_db, key, split_ingredients,
+)
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_CSV = ROOT / "data" / "IndianFoodDataset.csv"
@@ -44,7 +43,9 @@ def parse_row(row: dict[str, str]) -> dict | None:
             return ""
         if value.isdigit():
             return value
-        match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(minutes?|mins?|min|hours?|hrs?|hr)\s*", value, re.I)
+        match = re.fullmatch(
+            r"\s*(\d+(?:\.\d+)?)\s*(minutes?|mins?|min|hours?|hrs?|hr)\s*", value, re.I
+        )
         if not match:
             return value
         number = float(match.group(1))
@@ -52,8 +53,10 @@ def parse_row(row: dict[str, str]) -> dict | None:
             number *= 60
         return str(int(number)) if number.is_integer() else str(number)
 
-    name = first("TranslatedRecipeName", "RecipeName", "recipe_name", "name")
-    raw_ingredients = first("TranslatedIngredients", "Ingredients", "ingredient_list", "ingredients")
+    name = first("TranslatedRecipeName", "RecipeName", "Recipe Name", "recipe_name", "name", "title")
+    raw_ingredients = first(
+        "TranslatedIngredients", "Ingredients", "ingredient_list", "ingredients", "ingredients_list"
+    )
     if not name or not raw_ingredients:
         return None
 
@@ -61,13 +64,13 @@ def parse_row(row: dict[str, str]) -> dict | None:
     if not ingredients:
         return None
 
-    prep = as_minutes(first("PrepTimeInMins", "prep_time", "preparation_time"))
-    cook = as_minutes(first("CookTimeInMins", "cook_time"))
-    total = as_minutes(first("TotalTimeInMins", "total_time"))
+    prep = as_minutes(first("PrepTimeInMins", "Prep Time", "prep_time", "preparation_time"))
+    cook = as_minutes(first("CookTimeInMins", "Cook Time", "cook_time"))
+    total = as_minutes(first("TotalTimeInMins", "Total Time", "total_time"))
     if not total and prep.isdigit() and cook.isdigit():
         total = str(int(prep) + int(cook))
 
-    diet_raw = first("Diet", "diet").lower()
+    diet_raw = first("Diet", "diet", "diet_type").lower()
     if "vegetarian" in diet_raw and "non" not in diet_raw and "vegan" not in diet_raw:
         diet = "vegetarian"
     elif any(term in diet_raw for term in ("non-vegetarian", "non vegetarian", "nonvegetarian")):
@@ -82,25 +85,26 @@ def parse_row(row: dict[str, str]) -> dict | None:
         "ingredients_raw": raw_ingredients,
         "ingredient_list": json.dumps(ingredients, ensure_ascii=False),
         "ingredient_keys": json.dumps([key(item) for item in ingredients], ensure_ascii=False),
-        "instructions": first("TranslatedInstructions", "Instructions", "instruction", "method", "steps")
-            or "No instructions available in the source dataset.",
+        "instructions": first(
+            "TranslatedInstructions", "Instructions", "instruction", "method", "steps", "directions"
+        ) or "No instructions available in the source dataset.",
         "prep_time": prep,
         "cook_time": cook,
         "total_time": total,
-        "servings": first("Servings", "servings"),
-        "cuisine": first("Cuisine", "cuisine", default="Not specified"),
-        "course": first("Course", "course", default="Not specified"),
+        "servings": first("Servings", "servings", "yield"),
+        "cuisine": first("Cuisine", "cuisine", "cuisine_type", default="Not specified"),
+        "course": first("Course", "course", "meal_type", default="Not specified"),
         "diet": diet,
-        "source_url": first("URL", "SourceURL", "source_url", "url"),
+        "source_url": first("URL", "SourceURL", "source_url", "url", "recipe_url"),
     }
 
 
 def import_dataset(csv_path: Path = CSV_PATH, replace: bool = False) -> dict[str, int]:
+    csv_path = Path(csv_path).expanduser()
     if not csv_path.is_file():
         raise FileNotFoundError(
             f"Recipe CSV not found: {csv_path}\n"
-            "Place the authorized dataset at data/IndianFoodDataset.csv or set "
-            "RASOI_DATASET_PATH to its path."
+            "Run python download_dataset.py or set RASOI_DATASET_PATH to the CSV path."
         )
 
     init_db()
@@ -109,6 +113,15 @@ def import_dataset(csv_path: Path = CSV_PATH, replace: bool = False) -> dict[str
         reader = csv.DictReader(handle)
         if not reader.fieldnames:
             raise ValueError("CSV has no header row.")
+
+        normalized_headers = {normalize_header(name) for name in reader.fieldnames}
+        if not normalized_headers.intersection({
+            "translatedrecipename", "recipename", "name", "title", "recipename"
+        }):
+            raise ValueError(
+                "Could not identify a recipe-name column. Inspect the CSV headers and "
+                "extend parse_row() with the dataset's actual column names."
+            )
 
         with connect() as db:
             if replace:
@@ -143,18 +156,28 @@ def import_dataset(csv_path: Path = CSV_PATH, replace: bool = False) -> dict[str
                     )
                 processed += 1
 
+    all_recipes.cache_clear()
     return {"processed": processed, "skipped": skipped}
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Import recipe CSV into local SQLite or DATABASE_URL PostgreSQL.")
+    parser.add_argument("csv_path", nargs="?", type=Path, default=CSV_PATH, help="CSV file path")
+    parser.add_argument(
+        "--replace", action="store_true",
+        help="delete existing recipes before import (use carefully with a production database)",
+    )
+    args = parser.parse_args(argv)
     try:
-        result = import_dataset()
+        result = import_dataset(args.csv_path, replace=args.replace)
     except (OSError, ValueError, csv.Error) as exc:
         print(f"Dataset import failed: {exc}", file=sys.stderr)
         return 1
-    from app.recipes import all_recipes
-    all_recipes.cache_clear()
-    print(f"Dataset import complete. Processed/updated: {result['processed']}; skipped: {result['skipped']}.")
+
+    print(
+        f"Dataset import complete into {database_backend()}. "
+        f"Processed/updated: {result['processed']}; skipped: {result['skipped']}."
+    )
     return 0
 
 
