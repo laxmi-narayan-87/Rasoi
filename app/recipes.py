@@ -1,13 +1,33 @@
-"""Local SQLite recipe catalog and deterministic ingredient matching."""
+"""Recipe catalog and deterministic ingredient matching.
+
+Use SQLite for local development by default. Set DATABASE_URL to use a hosted
+PostgreSQL database (for example Supabase) in production or during a one-time
+cloud import. The public API remains database-agnostic.
+"""
 from __future__ import annotations
-import json, random, re, sqlite3
+
+import json
+import os
+import random
+import re
+import sqlite3
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = ROOT / "data" / "Recipe Database.db"
-ALIASES = {"aloo":"potato", "alu":"potato", "batata":"potato", "pyaz":"onion", "pyaaz":"onion", "tamatar":"tomato", "jeera":"cumin", "jira":"cumin", "haldi":"turmeric", "dhania":"coriander", "adrak":"ginger", "lahsun":"garlic", "dahi":"yogurt", "curd":"yogurt", "chawal":"rice", "matar":"peas", "gobi":"cauliflower", "baingan":"eggplant", "anda":"egg", "mirch":"chilli"}
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+ALIASES = {
+    "aloo": "potato", "alu": "potato", "batata": "potato",
+    "pyaz": "onion", "pyaaz": "onion", "tamatar": "tomato",
+    "jeera": "cumin", "jira": "cumin", "haldi": "turmeric",
+    "dhania": "coriander", "adrak": "ginger", "lahsun": "garlic",
+    "dahi": "yogurt", "curd": "yogurt", "chawal": "rice",
+    "matar": "peas", "gobi": "cauliflower", "baingan": "eggplant",
+    "anda": "egg", "mirch": "chilli",
+}
 
 
 def text(value):
@@ -17,7 +37,10 @@ def text(value):
 def key(value):
     value = text(value).lower().strip(" .;:-()[]{}")
     value = re.sub(r"^\d+(?:[./]\d+)?\s*(?:g|kg|ml|l|cups?|tbsp|tsp)?\s*", "", value)
-    value = re.sub(r"\b(finely chopped|roughly chopped|chopped|sliced|grated|crushed|fresh|dried|optional|for garnish|large|medium|small)\b", " ", value)
+    value = re.sub(
+        r"\b(finely chopped|roughly chopped|chopped|sliced|grated|crushed|fresh|dried|optional|for garnish|large|medium|small)\b",
+        " ", value,
+    )
     value = re.sub(r"\s+", " ", value).strip()
     return ALIASES.get(value, value)
 
@@ -28,12 +51,13 @@ def split_ingredients(value):
     for part in parts:
         part = re.sub(r"^\d+[.)]\s*|^[-*.)\s]+", "", text(part))
         part = re.sub(r"\b(to taste|as required|as needed)\b", "", part, flags=re.I).strip(" .;:-")
-        part = re.sub(r"^\d+(?:\s*/\s*\d+|\.\d+)?\s*(?:cups?|tbsp|tsp|tablespoons?|teaspoons?|grams?|g|kg|ml|litres?|liters?)\s+", "", part, flags=re.I)
+        part = re.sub(
+            r"^\d+(?:\s*/\s*\d+|\.\d+)?\s*(?:cups?|tbsp|tsp|tablespoons?|teaspoons?|grams?|g|kg|ml|litres?|liters?)\s+",
+            "", part, flags=re.I,
+        )
         if part and part.lower() not in {"optional", "divided", "for garnish"}:
             result.append(part)
     return result
-
-
 
 
 def duration(value):
@@ -42,19 +66,57 @@ def duration(value):
         return int(value)
     hours = re.search(r"(\d+)\s*(?:hours?|hrs?|hr)\b", value)
     minutes = re.search(r"(\d+)\s*(?:minutes?|mins?|min)\b", value)
-    return int(hours.group(1))*60 + int(minutes.group(1) if minutes else 0) if hours or minutes else None
+    return int(hours.group(1)) * 60 + int(minutes.group(1) if minutes else 0) if hours or minutes else None
 
 
+def database_backend():
+    """Return the active backend without exposing connection details."""
+    return "postgresql" if DATABASE_URL else "sqlite"
+
+
+class _PostgresConnection:
+    """Small adapter so existing parameterized SQL can use SQLite-style '?' markers."""
+
+    def __init__(self, connection):
+        self._connection = connection
+
+    def execute(self, sql, params=()):
+        return self._connection.execute(sql.replace("?", "%s"), params)
 
 
 @contextmanager
-def connect(db_path=DB_PATH):
-    db_path = Path(db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, timeout=5)
-    conn.row_factory = sqlite3.Row
+def connect(db_path=None):
+    """Open the configured database, or an explicit SQLite path for tests/tools.
+
+    Passing db_path always selects SQLite. With no path, DATABASE_URL selects
+    PostgreSQL; otherwise the local SQLite file is used.
+    """
+    if db_path is not None or not DATABASE_URL:
+        target = Path(db_path) if db_path is not None else DB_PATH
+        target.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(target, timeout=10)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        return
+
     try:
-        yield conn
+        import psycopg
+        from psycopg.rows import dict_row
+    except ImportError as exc:
+        raise RuntimeError(
+            "DATABASE_URL is set but psycopg is not installed. Install project requirements."
+        ) from exc
+
+    conn = psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=10)
+    try:
+        yield _PostgresConnection(conn)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -63,23 +125,30 @@ def connect(db_path=DB_PATH):
         conn.close()
 
 
-def init_db(db_path=DB_PATH):
+def init_db(db_path=None):
+    """Create the recipe table and index in the selected database."""
     with connect(db_path) as db:
-        db.execute("""CREATE TABLE IF NOT EXISTS recipes (
-            id INTEGER PRIMARY KEY, name TEXT, ingredients_raw TEXT, ingredient_list TEXT,
-            ingredient_keys TEXT, instructions TEXT, prep_time TEXT, cook_time TEXT,
-            total_time TEXT, servings TEXT, cuisine TEXT, course TEXT, diet TEXT, source_url TEXT
-        )""")
+        if db_path is not None or not DATABASE_URL:
+            db.execute("""CREATE TABLE IF NOT EXISTS recipes (
+                id INTEGER PRIMARY KEY, name TEXT, ingredients_raw TEXT, ingredient_list TEXT,
+                ingredient_keys TEXT, instructions TEXT, prep_time TEXT, cook_time TEXT,
+                total_time TEXT, servings TEXT, cuisine TEXT, course TEXT, diet TEXT, source_url TEXT
+            )""")
+        else:
+            db.execute("""CREATE TABLE IF NOT EXISTS recipes (
+                id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, ingredients_raw TEXT,
+                ingredient_list TEXT, ingredient_keys TEXT, instructions TEXT,
+                prep_time TEXT, cook_time TEXT, total_time TEXT, servings TEXT,
+                cuisine TEXT, course TEXT, diet TEXT, source_url TEXT
+            )""")
         db.execute("CREATE INDEX IF NOT EXISTS idx_recipe_name ON recipes(name)")
 
 
-
-
 @lru_cache(maxsize=4)
-def all_recipes(db_path=DB_PATH):
-    db_path = Path(db_path)
-    if not db_path.exists():
-        return []
+def all_recipes(db_path=None):
+    """Load and cache the catalog for a database target."""
+    if db_path is not None:
+        db_path = Path(db_path)
     with connect(db_path) as db:
         rows = db.execute("SELECT * FROM recipes ORDER BY name").fetchall()
     recipes = []
@@ -101,9 +170,9 @@ def _matches(wanted, available):
     )
 
 
-def _filtered(query="", diet="any", cuisine="any", course="any", max_time=None, db_path=DB_PATH):
+def _filtered(query="", diet="any", cuisine="any", course="any", max_time=None, db_path=None):
     result = []
-    for recipe in all_recipes(Path(db_path)):
+    for recipe in all_recipes(db_path):
         if diet != "any" and recipe["diet"] != diet:
             continue
         if cuisine != "any" and cuisine.casefold() not in recipe["cuisine"].casefold():
@@ -113,7 +182,9 @@ def _filtered(query="", diet="any", cuisine="any", course="any", max_time=None, 
         minutes = duration(recipe["total_time"])
         if max_time is not None and (minutes is None or minutes > max_time):
             continue
-        searchable = " ".join([recipe["name"], recipe["cuisine"], recipe["course"], *recipe["ingredient_list"]])
+        searchable = " ".join([
+            recipe["name"], recipe["cuisine"], recipe["course"], *recipe["ingredient_list"]
+        ])
         if query and query.casefold() not in searchable.casefold():
             continue
         result.append(recipe)
@@ -126,21 +197,21 @@ def summary(recipe):
     )} | {"ingredient_preview": recipe["ingredient_list"][:5]}
 
 
-def list_recipes(query="", diet="any", cuisine="any", course="any", max_time=None, limit=20, offset=0, db_path=DB_PATH):
+def list_recipes(query="", diet="any", cuisine="any", course="any", max_time=None, limit=20, offset=0, db_path=None):
     items = sorted(_filtered(query, diet, cuisine, course, max_time, db_path), key=lambda r: r["name"].casefold())
     return {"total": len(items), "items": [summary(r) for r in items[offset:offset + limit]]}
 
 
-def random_recipe(diet="any", cuisine="any", course="any", max_time=None, db_path=DB_PATH):
+def random_recipe(diet="any", cuisine="any", course="any", max_time=None, db_path=None):
     items = _filtered(diet=diet, cuisine=cuisine, course=course, max_time=max_time, db_path=db_path)
     return summary(random.choice(items)) if items else None
 
 
-def get_recipe(recipe_id, db_path=DB_PATH):
-    return next((r for r in all_recipes(Path(db_path)) if r["id"] == recipe_id), None)
+def get_recipe(recipe_id, db_path=None):
+    return next((r for r in all_recipes(db_path) if r["id"] == recipe_id), None)
 
 
-def search_recipes(ingredients, diet="any", cuisine="any", course="any", limit=50, offset=0, db_path=DB_PATH, max_time=None):
+def search_recipes(ingredients, diet="any", cuisine="any", course="any", limit=50, offset=0, db_path=None, max_time=None):
     requested = sorted(set(filter(None, (key(x) for x in ingredients))))
     if not requested:
         return {"total": 0, "items": []}
