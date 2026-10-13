@@ -1,0 +1,17 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Locally downloaded recipe datasets and SQLite database files
+data/*.csv
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
