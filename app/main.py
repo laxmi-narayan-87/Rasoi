@@ -1,20 +1,26 @@
 from pathlib import Path
 import os
 from typing import Literal
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from .recipes import all_recipes, get_recipe, init_db, list_recipes, random_recipe, search_recipes
+
+from .recipes import (
+    all_recipes, database_backend, get_recipe, init_db, list_recipes,
+    random_recipe, search_recipes,
+)
 
 BASE = Path(__file__).resolve().parent
 ROOT = BASE.parent
 DATASET_PATH = Path(os.getenv("RASOI_DATASET_PATH", str(ROOT / "data" / "IndianFoodDataset.csv")))
 Diet = Literal["any", "vegetarian", "non-vegetarian", "egg", "unknown"]
+
 app = FastAPI(
     title="Rasoi — Indian Recipe Finder API",
-    version="1.0.0",
-    description="Local recipe catalog and ingredient matcher. No external recipe API or user-history storage.",
+    version="1.1.0",
+    description="Recipe catalog and ingredient matcher backed by local SQLite or hosted PostgreSQL.",
 )
 app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 
@@ -31,9 +37,20 @@ class SearchRequest(BaseModel):
 
 @app.on_event("startup")
 def startup():
-    # SQLite is suitable for local development. Vercel needs persistent external storage.
+    # Production must use persistent storage. Never silently serve an empty,
+    # ephemeral SQLite database on Vercel.
+    if os.getenv("VERCEL") == "1" and not os.getenv("DATABASE_URL", "").strip():
+        raise RuntimeError(
+            "DATABASE_URL is required on Vercel. Configure a hosted PostgreSQL database "
+            "and import the recipe dataset before serving production traffic."
+        )
+
     init_db()
-    if os.getenv("VERCEL") != "1" and DATASET_PATH.is_file():
+
+    # Automatic CSV import is intentionally local-only. Import to hosted
+    # PostgreSQL explicitly with the importer and DATABASE_URL set in the shell,
+    # so deploys and cold starts never reimport the dataset.
+    if not os.getenv("VERCEL") and not os.getenv("DATABASE_URL") and DATASET_PATH.is_file():
         from import_dataset import import_dataset
         import_dataset(DATASET_PATH)
         all_recipes.cache_clear()
@@ -41,7 +58,11 @@ def startup():
 
 def require_data():
     if not all_recipes():
-        raise HTTPException(503, "Recipe database is empty. Add data/IndianFoodDataset.csv for local use; Vercel requires a persistent external database.")
+        raise HTTPException(
+            503,
+            "Recipe database is empty. Import data locally or configure DATABASE_URL "
+            "and import the dataset into hosted PostgreSQL.",
+        )
 
 
 @app.get("/", include_in_schema=False)
@@ -52,7 +73,12 @@ def home():
 @app.get("/api/health")
 def health():
     recipes = all_recipes()
-    return {"status": "ok", "dataset_loaded": bool(recipes), "recipe_count": len(recipes)}
+    return {
+        "status": "ok",
+        "dataset_loaded": bool(recipes),
+        "recipe_count": len(recipes),
+        "database": database_backend(),
+    }
 
 
 @app.get("/api/filters")
