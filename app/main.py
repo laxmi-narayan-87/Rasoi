@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 from typing import Literal
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -7,6 +8,8 @@ from pydantic import BaseModel, Field
 from .recipes import all_recipes, get_recipe, init_db, list_recipes, random_recipe, search_recipes
 
 BASE = Path(__file__).resolve().parent
+ROOT = BASE.parent
+DATASET_PATH = Path(os.getenv("RASOI_DATASET_PATH", str(ROOT / "data" / "IndianFoodDataset.csv")))
 Diet = Literal["any", "vegetarian", "non-vegetarian", "egg", "unknown"]
 app = FastAPI(
     title="Rasoi — Indian Recipe Finder API",
@@ -28,12 +31,18 @@ class SearchRequest(BaseModel):
 
 @app.on_event("startup")
 def startup():
+    # SQLite is supported for local development. Vercel functions are ephemeral,
+    # so a persistent external database is required for a production deployment.
     init_db()
+    if os.getenv("VERCEL") != "1" and DATASET_PATH.is_file():
+        from import_dataset import import_dataset
+        import_dataset(DATASET_PATH)
+        all_recipes.cache_clear()
 
 
 def require_data():
     if not all_recipes():
-        raise HTTPException(503, "Recipe database is empty. The local SQLite database must contain recipe records.")
+        raise HTTPException(503, "Recipe database is empty. Add data/IndianFoodDataset.csv and restart locally, or configure a persistent database for deployment.")
 
 
 @app.get("/", include_in_schema=False)
