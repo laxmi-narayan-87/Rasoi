@@ -1,37 +1,22 @@
-<<<<<<< Updated upstream
-# Secrets and local environment
-=======
-﻿# Secrets
->>>>>>> Stashed changes
+# Environment variables and secrets
 .env
 .env.*
 !.env.example
 
-<<<<<<< Updated upstream
-# Locally downloaded recipe datasets and SQLite database files
+# Downloaded datasets and local database files
 data/*.csv
 data/*.db
+data/*.DB
 data/*.sqlite
 data/*.sqlite3
+/recipedb/
+*.sqlite
+*.sqlite3
+*.bak
 
-# Python
-=======
 # Python-generated files
->>>>>>> Stashed changes
 __pycache__/
 *.py[cod]
 .venv/
 venv/
 .pytest_cache/
-<<<<<<< Updated upstream
-=======
-
-# Local datasets and databases
-/recipedb/
-data/*.csv
-data/*.db
-data/*.DB
-*.sqlite
-*.sqlite3
-*.bak
->>>>>>> Stashed changes
