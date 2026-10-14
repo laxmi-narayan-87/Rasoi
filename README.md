@@ -84,6 +84,14 @@ Before deploying:
 
 The application intentionally fails startup on Vercel if \`DATABASE_URL\` is missing rather than silently creating an empty SQLite database. It does not run the dataset importer during Vercel startup or cold starts.
 
+## Dependency and database access controls
+
+Runtime dependencies are pinned in `requirements.txt` using the versions resolved by the project's Python 3.12 CI environment. CI checks for unresolved merge-conflict markers, compiles the Python sources, runs importer regression tests, and audits the pinned dependency set with `pip-audit`.
+
+Rasoi's FastAPI backend accesses PostgreSQL with the server-side `DATABASE_URL`. The browser application does not need direct Supabase Data API access to recipe tables. The catalog, retained backup, and private source rows have row-level security enabled, and the `anon` and `authenticated` client roles have been revoked direct table access. Do not add public read policies unless the app is intentionally redesigned to query Supabase directly and the exposure has been reviewed.
+
+The production hardening SQL is tracked at `supabase/migrations/20261014153707_harden_rasoi_recipe_catalog_access.sql`. It must be kept in sync with any future schema or permission changes.
+
 ## API
 
 - \`POST /api/recipes/search\` — search by ingredients, diet, cuisine, course, and maximum time.
