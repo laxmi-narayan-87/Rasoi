@@ -71,7 +71,7 @@ def duration(value):
 
 def database_backend():
     """Return the active backend without exposing connection details."""
-    return "postgresql" if DATABASE_URL else "sqlite"
+    return "postgresql" if DATABASE_URL else ("unconfigured" if os.getenv("VERCEL") == "1" else "sqlite")
 
 
 class _PostgresConnection:
@@ -92,6 +92,13 @@ def connect(db_path=None):
     PostgreSQL; otherwise the local SQLite file is used.
     """
     if db_path is not None or not DATABASE_URL:
+        # Never silently fall back to ephemeral SQLite on Vercel. Explicit db_path
+        # remains available for tests and local import tools.
+        if db_path is None and os.getenv("VERCEL") == "1":
+            raise RuntimeError(
+                "DATABASE_URL is required on Vercel. Configure the Production "
+                "environment with a valid Supabase PostgreSQL connection URI."
+            )
         target = Path(db_path) if db_path is not None else DB_PATH
         target.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(target, timeout=10)
