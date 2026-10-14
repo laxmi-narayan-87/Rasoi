@@ -45,6 +45,33 @@ class RecipeDatasetImportTests(unittest.TestCase):
         self.assertEqual(recipe["total_time"], "30")
         self.assertEqual(recipe["diet"], "vegetarian")
 
+    def test_imports_extended_dataset_column_names(self):
+        self.write_csv([{
+            "recipe_title": "Aloo Tomato Curry",
+            "ingredients_canonical": '["potato", "tomato", "onion"]',
+            "directions_text": '["Chop vegetables", "Cook until soft"]',
+            "est_prep_time_min": "10",
+            "est_cook_time_min": "15",
+            "est_total_time_min": "25",
+            "dietary_profile": "vegetarian",
+            "cuisine_list": "North Indian",
+            "course_list": "Dinner",
+            "source_url": "https://example.test/aloo-tomato",
+        }])
+
+        result = import_dataset(self.csv_path, db_path=self.db_path)
+        recipes = all_recipes(self.db_path)
+
+        self.assertEqual(result, {"processed": 1, "skipped": 0})
+        self.assertEqual(len(recipes), 1)
+        self.assertEqual(recipes[0]["name"], "Aloo Tomato Curry")
+        self.assertEqual(recipes[0]["prep_time"], "10")
+        self.assertEqual(recipes[0]["cook_time"], "15")
+        self.assertEqual(recipes[0]["total_time"], "25")
+        self.assertEqual(recipes[0]["cuisine"], "North Indian")
+        self.assertEqual(recipes[0]["course"], "Dinner")
+        self.assertEqual(recipes[0]["instructions"], "1. Chop vegetables\n2. Cook until soft")
+
     def test_import_is_idempotent_and_recipes_are_searchable(self):
         self.write_csv([{
             "title": "Aloo Tomato Curry",

@@ -38,11 +38,18 @@ def parse_list(value: str) -> list[str] | None:
         return None
     if not isinstance(parsed, list):
         return None
-    return [str(item).strip() for item in parsed if item is not None and str(item).strip()]
+    return [
+        str(item).strip()
+        for item in parsed
+        if item is not None and str(item).strip()
+    ]
 
 
 def parse_row(row: dict[str, str]) -> dict | None:
-    normalized = {normalize_header(k): (v or "").strip() for k, v in row.items()}
+    normalized = {
+        normalize_header(name): (value or "").strip()
+        for name, value in row.items()
+    }
 
     def first(*names: str, default: str = "") -> str:
         for name in names:
@@ -58,7 +65,9 @@ def parse_row(row: dict[str, str]) -> dict | None:
         if value.isdigit():
             return value
         match = re.fullmatch(
-            r"\s*(\d+(?:\.\d+)?)\s*(minutes?|mins?|min|hours?|hrs?|hr)\s*", value, re.I
+            r"\s*(\d+(?:\.\d+)?)\s*(minutes?|mins?|min|hours?|hrs?|hr)\s*",
+            value,
+            re.I,
         )
         if not match:
             return value
@@ -67,18 +76,16 @@ def parse_row(row: dict[str, str]) -> dict | None:
             number *= 60
         return str(int(number)) if number.is_integer() else str(number)
 
+    # Support both the original recipe datasets and the newer 64K dataset's
+    # column names. normalize_header() handles spaces, underscores and casing.
     name = first(
-<<<<<<< Updated upstream
-        "TranslatedRecipeName", "RecipeName", "Recipe Name", "recipe_name", "name", "title"
+        "recipe_title", "TranslatedRecipeName", "RecipeName", "Recipe Name",
+        "recipe_name", "name", "title",
     )
     raw_ingredients = first(
-        "TranslatedIngredients", "Ingredients", "ingredient_list", "ingredients", "ingredients_list"
-=======
-        "recipe_title", "TranslatedRecipeName", "RecipeName", "Recipe Name", "recipe_name", "name", "title"
-    )
-    raw_ingredients = first(
-        "ingredients_canonical", "ingredients_raw", "ingredient_text", "TranslatedIngredients", "Ingredients", "ingredient_list", "ingredients", "ingredients_list"
->>>>>>> Stashed changes
+        "ingredients_canonical", "ingredients_raw", "ingredient_text",
+        "TranslatedIngredients", "Ingredients", "ingredient_list",
+        "ingredients", "ingredients_list",
     )
     if not name or not raw_ingredients:
         return None
@@ -93,25 +100,28 @@ def parse_row(row: dict[str, str]) -> dict | None:
     if not ingredients:
         return None
 
-<<<<<<< Updated upstream
-    prep = as_minutes(first("PrepTimeInMins", "Prep Time", "prep_time", "preparation_time"))
-    cook = as_minutes(first("CookTimeInMins", "Cook Time", "cook_time"))
-=======
-    prep = as_minutes(first("est_prep_time_min", "PrepTimeInMins", "Prep Time", "prep_time", "preparation_time"))
-    cook = as_minutes(first("est_cook_time_min", "CookTimeInMins", "Cook Time", "cook_time"))
->>>>>>> Stashed changes
-    total = as_minutes(first("TotalTimeInMins", "Total Time", "total_time"))
+    prep = as_minutes(first(
+        "est_prep_time_min", "PrepTimeInMins", "Prep Time", "prep_time",
+        "preparation_time",
+    ))
+    cook = as_minutes(first(
+        "est_cook_time_min", "CookTimeInMins", "Cook Time", "cook_time",
+    ))
+    total = as_minutes(first(
+        "est_total_time_min", "TotalTimeInMins", "Total Time", "total_time",
+    ))
     if not total and prep.isdigit() and cook.isdigit():
         total = str(int(prep) + int(cook))
 
-<<<<<<< Updated upstream
-    diet_raw = first("Diet", "diet", "diet_type").lower()
-=======
-    diet_raw = first("dietary_profile", "Diet", "diet", "diet_type").lower()
->>>>>>> Stashed changes
+    diet_raw = first(
+        "dietary_profile", "Diet", "diet", "diet_type",
+    ).lower()
     if "vegetarian" in diet_raw and "non" not in diet_raw and "vegan" not in diet_raw:
         diet = "vegetarian"
-    elif any(term in diet_raw for term in ("non-vegetarian", "non vegetarian", "nonvegetarian")):
+    elif any(
+        term in diet_raw
+        for term in ("non-vegetarian", "non vegetarian", "nonvegetarian")
+    ):
         diet = "non-vegetarian"
     elif "egg" in diet_raw:
         diet = "egg"
@@ -119,16 +129,14 @@ def parse_row(row: dict[str, str]) -> dict | None:
         diet = "unknown"
 
     raw_instructions = first(
-<<<<<<< Updated upstream
-        "TranslatedInstructions", "Instructions", "instruction", "method", "steps", "directions"
-=======
-        "directions_text", "directions_raw", "TranslatedInstructions", "Instructions", "instruction", "method", "steps", "directions"
->>>>>>> Stashed changes
+        "directions_text", "directions_raw", "TranslatedInstructions",
+        "Instructions", "instruction", "method", "steps", "directions",
     )
     parsed_instructions = parse_list(raw_instructions)
     if parsed_instructions is not None:
         instructions = "\n".join(
-            f"{index}. {step}" for index, step in enumerate(parsed_instructions, start=1)
+            f"{index}. {step}"
+            for index, step in enumerate(parsed_instructions, start=1)
         )
     else:
         instructions = raw_instructions or "No instructions available in the source dataset."
@@ -137,21 +145,27 @@ def parse_row(row: dict[str, str]) -> dict | None:
         "name": name,
         "ingredients_raw": raw_ingredients,
         "ingredient_list": json.dumps(ingredients, ensure_ascii=False),
-        "ingredient_keys": json.dumps([key(item) for item in ingredients], ensure_ascii=False),
+        "ingredient_keys": json.dumps(
+            [key(item) for item in ingredients], ensure_ascii=False
+        ),
         "instructions": instructions,
         "prep_time": prep,
         "cook_time": cook,
         "total_time": total,
         "servings": first("Servings", "servings", "yield"),
-<<<<<<< Updated upstream
-        "cuisine": first("Cuisine", "cuisine", "cuisine_type", default="Not specified"),
-        "course": first("Course", "course", "meal_type", "category", default="Not specified"),
-=======
-        "cuisine": first("cuisine_list", "Cuisine", "cuisine", "cuisine_type", default="Not specified"),
-        "course": first("course_list", "Course", "course", "meal_type", "category", default="Not specified"),
->>>>>>> Stashed changes
+        "cuisine": first(
+            "cuisine_list", "Cuisine", "cuisine", "cuisine_type",
+            default="Not specified",
+        ),
+        "course": first(
+            "course_list", "Course", "course", "meal_type", "category",
+            default="Not specified",
+        ),
         "diet": diet,
-        "source_url": first("URL", "SourceURL", "source_url", "url", "recipe_url", "link", "Recipe URL"),
+        "source_url": first(
+            "URL", "SourceURL", "source_url", "url", "recipe_url", "link",
+            "Recipe URL",
+        ),
     }
 
 
@@ -176,21 +190,17 @@ def import_dataset(
             raise ValueError("CSV has no header row.")
 
         normalized_headers = {normalize_header(name) for name in reader.fieldnames}
-<<<<<<< Updated upstream
-        if not normalized_headers.intersection({"translatedrecipename", "recipename", "name", "title"}):
-=======
-        if not normalized_headers.intersection({"recipetitle", "translatedrecipename", "recipename", "name", "title"}):
->>>>>>> Stashed changes
+        if not normalized_headers.intersection({
+            "recipetitle", "translatedrecipename", "recipename", "name", "title",
+        }):
             raise ValueError(
                 "Could not identify a recipe-name column. Inspect the CSV headers and "
                 "extend parse_row() with the dataset's actual column names."
             )
         if not normalized_headers.intersection({
-<<<<<<< Updated upstream
-            "translatedingredients", "ingredients", "ingredientlist", "ingredientslist"
-=======
-            "translatedingredients", "ingredients", "ingredientlist", "ingredientslist", "ingredientscanonical", "ingredientsraw", "ingredienttext"
->>>>>>> Stashed changes
+            "ingredientscanonical", "ingredientsraw", "ingredienttext",
+            "translatedingredients", "ingredients", "ingredientlist",
+            "ingredientslist",
         }):
             raise ValueError(
                 "Could not identify an ingredients column. Inspect the CSV headers and "
@@ -208,33 +218,41 @@ def import_dataset(
 
                 if recipe["source_url"]:
                     existing = db.execute(
-                        "SELECT id FROM recipes WHERE name = ? AND COALESCE(source_url, '') = ? LIMIT 1",
+                        "SELECT id FROM recipes WHERE name = ? "
+                        "AND COALESCE(source_url, '') = ? LIMIT 1",
                         (recipe["name"], recipe["source_url"]),
                     ).fetchone()
                 else:
                     # Avoid collapsing distinct recipes that share a title but have no URL.
                     existing = db.execute(
-                        "SELECT id FROM recipes WHERE name = ? AND COALESCE(source_url, '') = '' "
+                        "SELECT id FROM recipes WHERE name = ? "
+                        "AND COALESCE(source_url, '') = '' "
                         "AND ingredient_list = ? LIMIT 1",
                         (recipe["name"], recipe["ingredient_list"]),
                     ).fetchone()
 
                 fields = (
-                    "ingredients_raw", "ingredient_list", "ingredient_keys", "instructions",
-                    "prep_time", "cook_time", "total_time", "servings", "cuisine", "course", "diet",
+                    "ingredients_raw", "ingredient_list", "ingredient_keys",
+                    "instructions", "prep_time", "cook_time", "total_time",
+                    "servings", "cuisine", "course", "diet",
                 )
                 if existing:
                     db.execute(
-                        "UPDATE recipes SET " + ", ".join(f"{field}=?" for field in fields) + " WHERE id=?",
+                        "UPDATE recipes SET "
+                        + ", ".join(f"{field}=?" for field in fields)
+                        + " WHERE id=?",
                         tuple(recipe[field] for field in fields) + (existing["id"],),
                     )
                 else:
                     insert_fields = (
-                        "name", "ingredients_raw", "ingredient_list", "ingredient_keys", "instructions",
-                        "prep_time", "cook_time", "total_time", "servings", "cuisine", "course", "diet", "source_url",
+                        "name", "ingredients_raw", "ingredient_list",
+                        "ingredient_keys", "instructions", "prep_time",
+                        "cook_time", "total_time", "servings", "cuisine",
+                        "course", "diet", "source_url",
                     )
                     db.execute(
-                        f"INSERT INTO recipes ({', '.join(insert_fields)}) VALUES ({', '.join('?' for _ in insert_fields)})",
+                        f"INSERT INTO recipes ({', '.join(insert_fields)}) "
+                        f"VALUES ({', '.join('?' for _ in insert_fields)})",
                         tuple(recipe[field] for field in insert_fields),
                     )
                 processed += 1
@@ -247,7 +265,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Import recipe CSV into local SQLite or DATABASE_URL PostgreSQL."
     )
-    parser.add_argument("csv_path", nargs="?", type=Path, default=CSV_PATH, help="CSV file path")
+    parser.add_argument(
+        "csv_path", nargs="?", type=Path, default=CSV_PATH, help="CSV file path"
+    )
     parser.add_argument(
         "--replace", action="store_true",
         help="delete existing recipes before import (use carefully with a production database)",
