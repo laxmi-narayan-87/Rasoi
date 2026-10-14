@@ -241,3 +241,4 @@ def search_recipes(ingredients, diet="any", cuisine="any", course="any", limit=5
         "total": len(found), "items": found[offset:offset + limit],
         "message": "Match percentage reflects listed ingredients supplied. Check full instructions for pantry staples and optional ingredients.",
     }
+
