@@ -1,9 +1,10 @@
 from pathlib import Path
+import logging
 import os
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -12,10 +13,16 @@ from .recipes import (
     random_recipe, search_recipes,
 )
 
+logger = logging.getLogger(__name__)
 BASE = Path(__file__).resolve().parent
 ROOT = BASE.parent
 DATASET_PATH = Path(os.getenv("RASOI_DATASET_PATH", str(ROOT / "data" / "IndianFoodDataset.csv")))
 Diet = Literal["any", "vegetarian", "non-vegetarian", "egg", "unknown"]
+
+DATABASE_UNAVAILABLE_MESSAGE = (
+    "Recipe database is unavailable. Verify that the Production DATABASE_URL "
+    "contains a valid Supabase PostgreSQL connection URI and that the database is reachable."
+)
 
 app = FastAPI(
     title="Rasoi — Indian Recipe Finder API",
@@ -37,31 +44,38 @@ class SearchRequest(BaseModel):
 
 @app.on_event("startup")
 def startup():
-    # Production must use persistent storage. Never silently serve an empty,
-    # ephemeral SQLite database on Vercel.
-    if os.getenv("VERCEL") == "1" and not os.getenv("DATABASE_URL", "").strip():
-        raise RuntimeError(
-            "DATABASE_URL is required on Vercel. Configure a hosted PostgreSQL database "
-            "and import the recipe dataset before serving production traffic."
-        )
+    # The schema and catalog are provisioned separately in hosted PostgreSQL.
+    # Avoid running DDL or opening database connections during Vercel cold starts:
+    # a transient database failure should not prevent the function from booting.
+    if os.getenv("VERCEL") == "1":
+        return
 
     init_db()
 
     # Automatic CSV import is intentionally local-only. Import to hosted
     # PostgreSQL explicitly with the importer and DATABASE_URL set in the shell,
     # so deploys and cold starts never reimport the dataset.
-    if not os.getenv("VERCEL") and not os.getenv("DATABASE_URL") and DATASET_PATH.is_file():
+    if not os.getenv("DATABASE_URL") and DATASET_PATH.is_file():
         from import_dataset import import_dataset
         import_dataset(DATASET_PATH)
         all_recipes.cache_clear()
 
 
+def load_catalog():
+    """Load recipes or turn database errors into an actionable HTTP 503."""
+    try:
+        return all_recipes()
+    except Exception as exc:
+        logger.exception("Unable to load Rasoi recipe catalog")
+        raise HTTPException(status_code=503, detail=DATABASE_UNAVAILABLE_MESSAGE) from exc
+
+
 def require_data():
-    if not all_recipes():
+    if not load_catalog():
         raise HTTPException(
             503,
-            "Recipe database is empty. Import data locally or configure DATABASE_URL "
-            "and import the dataset into hosted PostgreSQL.",
+            "Recipe database is empty. Import the catalog into hosted PostgreSQL "
+            "and verify the Production DATABASE_URL.",
         )
 
 
@@ -72,7 +86,21 @@ def home():
 
 @app.get("/api/health")
 def health():
-    recipes = all_recipes()
+    try:
+        recipes = all_recipes()
+    except Exception:
+        logger.exception("Rasoi health check could not read the recipe catalog")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "degraded",
+                "dataset_loaded": False,
+                "recipe_count": 0,
+                "database": database_backend(),
+                "message": DATABASE_UNAVAILABLE_MESSAGE,
+            },
+        )
+
     return {
         "status": "ok",
         "dataset_loaded": bool(recipes),
@@ -83,7 +111,7 @@ def health():
 
 @app.get("/api/filters")
 def filters():
-    recipes = all_recipes()
+    recipes = load_catalog()
     return {
         "diet": ["any", "vegetarian", "non-vegetarian", "egg", "unknown"],
         "cuisines": sorted({r["cuisine"] for r in recipes if r["cuisine"] != "Not specified"}),
