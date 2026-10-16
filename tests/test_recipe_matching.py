@@ -1,7 +1,7 @@
 """Regression tests for recipe duration parsing."""
 import unittest
 
-from app.recipes import duration
+from app.recipes import duration, key
 
 
 class RecipeDurationTests(unittest.TestCase):
@@ -16,6 +16,12 @@ class RecipeDurationTests(unittest.TestCase):
 
     def test_rejects_unrecognized_duration_text(self):
         self.assertIsNone(duration("about an hour"))
+
+    def test_normalizes_common_ingredient_plurals(self):
+        self.assertEqual(key("tomatoes"), "tomato")
+        self.assertEqual(key("potatoes"), "potato")
+        self.assertEqual(key("eggs"), "egg")
+        self.assertEqual(key("chilies"), "chilli")
 
 
 if __name__ == "__main__":
