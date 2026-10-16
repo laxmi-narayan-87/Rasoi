@@ -195,22 +195,54 @@ def _matches(wanted, available):
     )
 
 
+def _like_contains(value):
+    """Escape SQL LIKE metacharacters while preserving literal substring search."""
+    return "%" + str(value).replace("!", "!!").replace("%", "!%").replace("_", "!_").casefold() + "%"
+
+
 def _filtered(query="", diet="any", cuisine="any", course="any", max_time=None, db_path=None):
+    """Filter candidate recipes in SQL; parse cooking times after retrieval.
+
+    Filters use bound parameters and the same SQL operators supported by SQLite
+    and PostgreSQL. Time parsing stays in Python because source values are not
+    consistently stored as numeric minutes.
+    """
+    clauses = []
+    params = []
+
+    if diet != "any":
+        clauses.append("LOWER(COALESCE(diet, '')) = ?")
+        params.append(diet.casefold())
+    if cuisine != "any":
+        clauses.append("LOWER(COALESCE(cuisine, '')) LIKE ? ESCAPE '!'")
+        params.append(_like_contains(cuisine))
+    if course != "any":
+        clauses.append("LOWER(COALESCE(course, '')) LIKE ? ESCAPE '!'")
+        params.append(_like_contains(course))
+    if query:
+        searchable = (
+            "LOWER(COALESCE(name, '') || ' ' || COALESCE(cuisine, '') || ' ' || "
+            "COALESCE(course, '') || ' ' || COALESCE(ingredient_list, ''))"
+        )
+        clauses.append(searchable + " LIKE ? ESCAPE '!'")
+        params.append(_like_contains(query))
+
+    sql = "SELECT * FROM recipes"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY name"
+
+    with connect(db_path) as db:
+        rows = db.execute(sql, params).fetchall()
+
     result = []
-    for recipe in all_recipes(db_path):
-        if diet != "any" and recipe["diet"] != diet:
-            continue
-        if cuisine != "any" and cuisine.casefold() not in recipe["cuisine"].casefold():
-            continue
-        if course != "any" and course.casefold() not in recipe["course"].casefold():
-            continue
-        minutes = duration(recipe["total_time"])
+    for row in rows:
+        recipe = dict(row)
+        recipe["ingredient_list"] = json.loads(recipe.pop("ingredient_list") or "[]")
+        recipe["ingredient_keys"] = json.loads(recipe.pop("ingredient_keys") or "[]")
+        recipe.pop("ingredients_raw", None)
+        minutes = duration(recipe.get("total_time"))
         if max_time is not None and (minutes is None or minutes > max_time):
-            continue
-        searchable = " ".join([
-            recipe["name"], recipe["cuisine"], recipe["course"], *recipe["ingredient_list"]
-        ])
-        if query and query.casefold() not in searchable.casefold():
             continue
         result.append(recipe)
     return result
