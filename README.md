@@ -82,7 +82,7 @@ Before deploying:
 - Check \`/api/health\`. It reports the active database backend and recipe count without exposing credentials.
 - Test \`/api/recipes\`, \`/api/recipes/random\`, \`/api/recipes/{id}\`, and \`POST /api/recipes/search\`.
 
-The application intentionally fails startup on Vercel if \`DATABASE_URL\` is missing rather than silently creating an empty SQLite database. It does not run the dataset importer during Vercel startup or cold starts.
+On Vercel, the app intentionally skips database initialization during startup. If `DATABASE_URL` is missing or the hosted database is unreachable, database-backed endpoints return an actionable HTTP 503 and `/api/health` reports a degraded status. The app does not silently fall back to ephemeral SQLite, and it never imports the dataset during cold starts.
 
 ## Dependency and database access controls
 

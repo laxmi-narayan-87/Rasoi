@@ -61,13 +61,31 @@ def split_ingredients(value):
 
 
 def duration(value):
+    """Convert common cooking-time strings to minutes; return None if unknown."""
     value = text(value).lower()
     if value.isdigit():
         return int(value)
-    hours = re.search(r"(\d+)\s*(?:hours?|hrs?|hr)\b", value)
-    minutes = re.search(r"(\d+)\s*(?:minutes?|mins?|min)\b", value)
-    return int(hours.group(1)) * 60 + int(minutes.group(1) if minutes else 0) if hours or minutes else None
 
+    # Support compound and fractional values such as "1 hr 30 min" and "1.5 hours".
+    matches = list(re.finditer(
+        r"(\d+(?:\.\d+)?)\s*(hours?|hrs?|hr|minutes?|mins?|min)\b",
+        value,
+    ))
+    if not matches:
+        return None
+
+    remainder = value
+    total = 0.0
+    for match in reversed(matches):
+        amount = float(match.group(1))
+        unit = match.group(2)
+        total += amount * (60 if unit.startswith(("hour", "hr")) else 1)
+        remainder = remainder[:match.start()] + remainder[match.end():]
+
+    # Reject partially parsed values instead of silently returning a misleading duration.
+    if re.sub(r"[\s,and]+", "", remainder):
+        return None
+    return int(total) if total.is_integer() else round(total)
 
 def database_backend():
     """Return the active backend without exposing connection details."""
