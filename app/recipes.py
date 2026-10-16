@@ -229,25 +229,28 @@ def _filtered(query="", diet="any", cuisine="any", course="any", max_time=None, 
         clauses.append(searchable + " LIKE ? ESCAPE '!'")
         params.append(_like_contains(query))
 
-    sql = "SELECT * FROM recipes"
     if clauses:
-        sql += " WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY name"
+        sql = "SELECT * FROM recipes WHERE " + " AND ".join(clauses) + " ORDER BY name"
+        with connect(db_path) as db:
+            rows = db.execute(sql, params).fetchall()
+        candidates = []
+        for row in rows:
+            recipe = dict(row)
+            recipe["ingredient_list"] = json.loads(recipe.pop("ingredient_list") or "[]")
+            recipe["ingredient_keys"] = json.loads(recipe.pop("ingredient_keys") or "[]")
+            recipe.pop("ingredients_raw", None)
+            candidates.append(recipe)
+    else:
+        # Reuse the process-local catalog cache for unfiltered ingredient searches
+        # and random selection; avoid repeatedly transferring the full catalog.
+        candidates = all_recipes(db_path)
 
-    with connect(db_path) as db:
-        rows = db.execute(sql, params).fetchall()
-
-    result = []
-    for row in rows:
-        recipe = dict(row)
-        recipe["ingredient_list"] = json.loads(recipe.pop("ingredient_list") or "[]")
-        recipe["ingredient_keys"] = json.loads(recipe.pop("ingredient_keys") or "[]")
-        recipe.pop("ingredients_raw", None)
-        minutes = duration(recipe.get("total_time"))
-        if max_time is not None and (minutes is None or minutes > max_time):
-            continue
-        result.append(recipe)
-    return result
+    if max_time is None:
+        return candidates
+    return [
+        recipe for recipe in candidates
+        if (minutes := duration(recipe.get("total_time"))) is not None and minutes <= max_time
+    ]
 
 
 def summary(recipe):
