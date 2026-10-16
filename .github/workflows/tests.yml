@@ -2,7 +2,7 @@ name: Python tests and dependency audit
 
 on:
   push:
-    branches: [main]
+    branches: [main, "fine-tune/**"]
   pull_request:
   workflow_dispatch:
 
