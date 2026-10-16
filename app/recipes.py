@@ -27,6 +27,8 @@ ALIASES = {
     "dahi": "yogurt", "curd": "yogurt", "chawal": "rice",
     "matar": "peas", "gobi": "cauliflower", "baingan": "eggplant",
     "anda": "egg", "mirch": "chilli",
+    "tomatoes": "tomato", "potatoes": "potato", "onions": "onion",
+    "eggs": "egg", "chillies": "chilli", "chilies": "chilli", "chilis": "chilli",
 }
 
 
