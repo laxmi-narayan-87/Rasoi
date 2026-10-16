@@ -73,7 +73,7 @@ For local SQLite development, leave \`DATABASE_URL\` unset. When \`DATABASE_URL\
 
 ## 4. Deploy on Vercel
 
-The repository includes \`api/index.py\` and \`vercel.json\` to expose the FastAPI app through Vercel's Python runtime.
+The Vercel project is configured with the FastAPI framework. This repository currently does not contain a custom \`api/index.py\` or \`vercel.json\`; deployment behavior therefore depends on the project's framework settings and Vercel's build configuration. Verify the preview deployment's \`/api/health\` endpoint before promoting changes.
 
 Before deploying:
 - Add \`DATABASE_URL\` in Vercel's Environment Variables.
