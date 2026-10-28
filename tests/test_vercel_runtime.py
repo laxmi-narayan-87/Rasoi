@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from app.main import health, load_catalog, startup
+from app.main import database_health, health, load_catalog, startup
 from app.recipes import connect, database_backend
 
 
@@ -37,6 +37,26 @@ class VercelRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["status"], "degraded")
         self.assertEqual(payload["database"], "unconfigured")
         self.assertIn("Production DATABASE_URL", payload["message"])
+
+
+    def test_database_liveness_check_uses_lightweight_query(self):
+        with patch("app.main.connect") as connect_mock:
+            with patch("app.main.database_backend", return_value="postgresql"):
+                result = database_health()
+
+        connect_mock.return_value.__enter__.return_value.execute.assert_called_once_with("SELECT 1")
+        self.assertEqual(result, {"status": "ok", "database": "postgresql"})
+
+    def test_database_liveness_check_returns_503_when_database_fails(self):
+        with patch("app.main.connect", side_effect=RuntimeError("connection failed")):
+            with patch("app.main.database_backend", return_value="postgresql"):
+                with patch("app.main.logger.exception"):
+                    response = database_health()
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(json.loads(response.body), {
+            "status": "degraded", "database": "postgresql"
+        })
 
     def test_recipe_catalog_errors_are_returned_as_http_503(self):
         with patch("app.main.all_recipes", side_effect=RuntimeError("connection failed")):
