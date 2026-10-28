@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .recipes import (
-    all_recipes, database_backend, get_recipe, init_db, list_recipes,
+    all_recipes, connect, database_backend, get_recipe, init_db, list_recipes,
     random_recipe, search_recipes,
 )
 
@@ -107,6 +107,21 @@ def health():
         "recipe_count": len(recipes),
         "database": database_backend(),
     }
+
+
+@app.get("/api/health/db", include_in_schema=False)
+def database_health():
+    """Lightweight database liveness check; do not load the full recipe catalog."""
+    try:
+        with connect() as db:
+            db.execute("SELECT 1").fetchone()
+    except Exception:
+        logger.exception("Rasoi database liveness check failed")
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "database": database_backend()},
+        )
+    return {"status": "ok", "database": database_backend()}
 
 
 @app.get("/api/filters")
