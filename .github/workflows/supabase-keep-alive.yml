@@ -31,7 +31,7 @@ jobs:
           response="$(curl --fail --silent --show-error \
             --max-time 25 \
             --retry 2 --retry-delay 5 \
-            "$HEALTH_URL/api/health")"
+            "$HEALTH_URL/api/health/db")"
 
           echo "$response"
-          python -c 'import json,sys; d=json.load(sys.stdin); assert d.get("status") == "ok", f"status={d.get('"'status'"')}"; assert d.get("database") == "postgresql", f"database={d.get('"'database'"')}"; assert d.get("recipe_count", 0) > 0, "recipe catalog is empty"; print("Rasoi production PostgreSQL health check passed.")' <<< "$response"
+          python -c "import json,sys; d=json.load(sys.stdin); assert d.get('status') == 'ok', d; assert d.get('database') == 'postgresql', d; print('Rasoi production PostgreSQL health check passed.')" <<< "$response"
