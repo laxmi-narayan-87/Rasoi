@@ -1,0 +1,37 @@
+name: Rasoi Supabase Keep-Alive
+
+on:
+  schedule:
+    # GitHub Actions cron is UTC; run four times daily as best-effort activity.
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rasoi-supabase-keep-alive
+  cancel-in-progress: false
+
+jobs:
+  database-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check production recipe database
+        env:
+          HEALTH_URL: ${{ vars.RASOI_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$HEALTH_URL" ]]; then
+            echo "Missing repository variable RASOI_HEALTH_URL"
+            exit 1
+          fi
+
+          response="$(curl --fail --silent --show-error \
+            --max-time 25 \
+            --retry 2 --retry-delay 5 \
+            "$HEALTH_URL/api/health")"
+
+          echo "$response"
+          python -c 'import json,sys; d=json.load(sys.stdin); assert d.get("status") == "ok", f"status={d.get('"'status'"')}"; assert d.get("database") == "postgresql", f"database={d.get('"'database'"')}"; assert d.get("recipe_count", 0) > 0, "recipe catalog is empty"; print("Rasoi production PostgreSQL health check passed.")' <<< "$response"
